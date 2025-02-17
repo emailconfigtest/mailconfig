@@ -1,6 +1,8 @@
 import os
 import json
 import re
+from srv import resolve_mx
+from autoconfig import from_ISPDB
 
 def getkeylist(keys, item):
     re = []
@@ -10,56 +12,72 @@ def getkeylist(keys, item):
     return re
 
 def buildin(domain):
+    """Look up email configuration in builtin provider list and ISPDB"""
+    
+    mxdomain = None
+    mxlist = resolve_mx(domain)
+    if mxlist:
+        mxdomain = mxlist[0]["hostname"]
+    
     data = {}
     filepath = "./buildinlists"
+    
+    # Check for key.json
     files = os.listdir(filepath)
     if "key.json" not in files:
-        data["error"]= "file key.json not found"
+        data["error"] = "file key.json not found"
         return data
+        
     try:
-        kfile = open(f"{filepath}/key.json",'r')
-        json_str = kfile.read()
-        kfile.close()
-        keyinfo = json.loads(json_str)
+        with open(f"{filepath}/key.json", 'r') as kfile:
+            keyinfo = json.loads(kfile.read())
     except Exception as e:
         data["error"] = str(e)
         return data
 
-    data["warning"] = []
+    # Process builtin configurations
     for key, matchs in keyinfo.items():
-        if key+".txt" not in files:
-            data["warning"].append(f"file {key}.txt not found" )
-            continue
-        f = open(f"{filepath}/{key}.txt",'r')
-        jlist = f.read().split('\n')[0:-1]
-        f.close()
+        with open(f"{filepath}/{key}.txt", 'r') as f:
+            jlist = f.read().split('\n')[0:-1]
+            
         relist = []
         for item in jlist:
             item = json.loads(item)
             if "domain" not in item or key not in item:
                 continue
+                
             match = False
             if matchs:
-                matcher = getkeylist(matchs, item)
-                for restring in matcher:
-                    reinfo = re.match(restring, domain)
-                    if reinfo and reinfo.group() == domain:  #the regex must fully match the domain
-                        match = True
-                        break
+                if "domainre" in matchs:
+                    matcher = getkeylist(matchs["domainre"], item)
+                    for restring in matcher:
+                        reinfo = re.match(restring, domain)
+                        if reinfo and reinfo.group() == domain:
+                            match = True
+                            break
+                            
+                if mxdomain and not match and "mxre" in matchs:
+                    matcher = getkeylist(matchs["mxre"], item)
+                    for restring in matcher:
+                        reinfo = re.match(restring, mxdomain)
+                        if reinfo and reinfo.group() == mxdomain:
+                            match = True
+                            break
+                            
             if not match and "domain" in item:
                 if domain == item["domain"]:
                     match = True
+                    
             if match:
                 relist.append(item[key])
+                
         data[key] = relist
+
+    # Add ISPDB results
+    ispdb_result = from_ISPDB(domain)
+    if ispdb_result and "config" in ispdb_result:
+        data["ISPDB"] = [ispdb_result["config"]]
+    else:
+        data["ISPDB"] = ["No ISPDB configuration found"]
+
     return data
-
-
-if __name__ == "__main__":
-
-    # x = buildin('bigpond.net.au')
-    # x = buildin("gmail.com")
-    # x = buildin("mx1.comcast.net")
-    x = buildin("ymail.com")
-    json_string = json.dumps(x, indent=4, default=lambda obj: obj.__dict__)
-    print(json_string)

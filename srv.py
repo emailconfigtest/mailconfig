@@ -2,9 +2,9 @@ import dns.resolver
 import logging
 
 my_resolver = dns.resolver.Resolver(configure=False)
-my_resolver.nameservers = ['8.8.8.8', '1.1.1.1']
+my_resolver.nameservers = ['8.8.8.8']
 DNS_RESOLVERS = ['8.8.8.8']
-DNS_TIMEOUT = 30
+DNS_TIMEOUT = 10
 LOGGER = logging.getLogger(__name__)
 
 def query_dns(query_name, query_type):
@@ -44,14 +44,9 @@ def resolve_mx(query_name):
     if len(answers) == 0:
         return data
     for rdata in answers:
+        exchange = str(rdata.exchange)
         entry = {
-            "hostname": ".".join(
-                [
-                    x.decode('utf-8')
-                    for x in rdata.exchange.labels
-                    if x.decode('utf-8') != ""
-                ]
-            ),
+            "hostname": exchange if exchange == '.' else exchange.rstrip('.'),
             "priority": rdata.preference,
         }
         data.append(entry)
@@ -65,41 +60,33 @@ def resolve_srv(query_name):
     if len(answers) == 0:
         return data
     for rdata in answers:
+        target = str(rdata.target)
         entry = {
-            "hostname": ".".join(
-                [
-                    x.decode('utf-8')
-                    for x in rdata.target.labels
-                    if x.decode('utf-8') != ""
-                ]
-            ),
+            "hostname": target if target == '.' else target.rstrip('.'),
             "port": rdata.port,
             "priority": rdata.priority,
             "weight": rdata.weight,
         }
         cur.append(entry)
-    data['srv_record'] = sorted(cur, key=lambda k: (k['priority'], -k['weight'])) #dns 优先级
-    data['is_dnssec'] = check_dnssec(query_name, 'SRV')
+    data['srv_record'] = sorted(cur, key=lambda k: (k['priority'], -k['weight']))
+    data['is_dnssec_validated'] = check_dnssec(query_name, 'SRV')
     return data
 
 def srv(domain):
-    # Function replaced by ./srv-scan/scan.go
     '''
     Constructs a SRV record for the given domain, and returns a dictionary of the results.
+    Ref: RFC 6186/8314.
     '''
     data = {}
-    #data["autoconfig"] = resolve_srv(f"_autoconfig._tcp.{domain}")
     data["imaps"] = resolve_srv(f"_imaps._tcp.{domain}")
     data["imap"] = resolve_srv(f"_imap._tcp.{domain}")
     data["pop3s"] = resolve_srv(f"_pop3s._tcp.{domain}")
     data["pop3"] = resolve_srv(f"_pop3._tcp.{domain}")
-    data["submissions"] = resolve_srv(f"_submissions.tcp.{domain}")
-    data["submission"] = resolve_srv(f"_submission.tcp.{domain}")
+    data["submissions"] = resolve_srv(f"_submissions._tcp.{domain}")
+    data["submission"] = resolve_srv(f"_submission._tcp.{domain}")
     return data
 
 
 if __name__ == "__main__":
-    import json
-    x = srv('pobox.com')
-    json_string = json.dumps(x, indent=4, default=lambda obj: obj.__dict__)
-    print(json_string)
+    # resolve_mx(f"cultmovie.com")
+    print(srv("gaggle.net"))

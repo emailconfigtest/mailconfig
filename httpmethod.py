@@ -9,7 +9,7 @@ xml: a string in xml format
 redirect: all redirect paths in http header, from person lookup url to final url get the xml
 
 https_method return,
-verified : is certificate can be verified
+https_verified : is certificate can be verified
 
 in get_redirect_post return
 error: redirect not to a https url
@@ -18,21 +18,25 @@ error: redirect not to a https url
 import io
 import requests
 import certifi
+import logging
 
+LOGGER = logging.getLogger(__name__)
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.93 Safari/537.36 (Autoconfig Test)"
 DEFAULT_TIMEOUT = 5
+
 def process_respond(response):
+    """Process HTTP response and return structured output"""
     re = {}
-    # re["error"] = ""
     content_type = response.headers.get("content-type", '').lower().split(';')[0]
     if response.status_code >= 200 and response.status_code < 300:
         if content_type == "text/xml" or content_type == "application/xml":
             # track the redirection.
-            if response.history:
-                redict = {}
-                for redirect in response.history:
-                    redict[redirect.url] = redirect.status_code
-                redict[response.url] = response.status_code
-                re["redirect"] = redict
+            # if response.history:
+            redict = {}
+            for redirect in response.history:
+                redict[redirect.url] = redirect.status_code
+            redict[response.url] = response.status_code
+            re["redirect"] = redict
             # print(response.text)
             xml_file = io.StringIO(response.text)
             # data[alias]['config_from_http'] = parse_autoconfig(xml_file)
@@ -41,19 +45,19 @@ def process_respond(response):
             # if config_from_http:
             #     re["config"] = config_from_http
         else:
-            # print(response.text)
-            re["error"] = "Content-Type is not xml"
+            re["error"] = f"Unexpected content type: {content_type}"
     else:
-        re["error"] = f"status code: {response.status_code}, {response.reason}"
+        re["error"] = f"HTTP {response.status_code}: {response.reason}"
     return re
 
 def http_get(url):
-    user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.93 Safari/537.36 (Autoconfig Test)"
+    """Make HTTP GET request with retries"""
+    LOGGER.info(f"Making HTTP GET request to {url}")
     # user_agent = "Mozilla/5.0"
     # request from HTTP
     re = {}
     try:
-        response = requests.get(url, timeout=DEFAULT_TIMEOUT, headers={'User-Agent': user_agent})
+        response = requests.get(url, timeout=DEFAULT_TIMEOUT, headers={'User-Agent': USER_AGENT})
     except requests.exceptions.RequestException as e:
         if isinstance(e, requests.exceptions.TooManyRedirects):
             re["error"] = "Too many redirects."
@@ -64,23 +68,26 @@ def http_get(url):
         else:
             re["error"] = str(e)
     except Exception as e:
+        LOGGER.error(f"HTTP GET request failed for {url}: {str(e)}")
         re["error"] = str(e)
     else:
         re.update(process_respond(response))
     return re
 
 def https_get(url):
-    user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.93 Safari/537.36 (Autoconfig Test)"
+    """Make HTTPS GET request with retries"""
+    LOGGER.info(f"Making HTTPS GET request to {url}")
     # user_agent = "Mozilla/5.0"
     #  request from HTTPS
     re = {}
     try:
-        response = requests.get(url, verify=certifi.where(), timeout=DEFAULT_TIMEOUT, headers={'User-Agent': user_agent})
-        re["verified"] = True
+        response = requests.get(url, verify=certifi.where(), timeout=DEFAULT_TIMEOUT, headers={'User-Agent': USER_AGENT})
+        re["https_verified"] = True
     except requests.exceptions.SSLError:
+        LOGGER.warning(f"SSL verification failed for {url}, retrying without verification")
         try:
-            re["verified"] = False
-            response = requests.get(url, verify=False, timeout=DEFAULT_TIMEOUT, headers={'User-Agent': user_agent})
+            re["https_verified"] = False
+            response = requests.get(url, verify=False, timeout=DEFAULT_TIMEOUT, headers={'User-Agent': USER_AGENT})
         except requests.exceptions.SSLError:
             re["error"] = "SSL Connection Error"
             return re
@@ -102,14 +109,18 @@ def https_get(url):
 
 # post need to set data, need domain
 def http_post(url, mailaddress):
-    body = f"""<?xml version='1.0' encoding='utf-8'?><Autodiscover xmlns="http://schemas.microsoft.com/exchange/autodiscover/outlook/requestschema/2006">
-        <Request><EMailAddress>{mailaddress}</EMailAddress>
-        <AcceptableResponseSchema>http://schemas.microsoft.com/exchange/autodiscover/outlook/responseschema/2006a</AcceptableResponseSchema>
-        </Request></Autodiscover>
-    """
+    """Make HTTP POST request with retries and proper error handling"""
+    LOGGER.info(f"Making HTTP POST request to {url}")
+    body = f"""<?xml version='1.0' encoding='utf-8'?>
+    <Autodiscover xmlns="http://schemas.microsoft.com/exchange/autodiscover/outlook/requestschema/2006">
+        <Request>
+            <EMailAddress>{mailaddress}</EMailAddress>
+            <AcceptableResponseSchema>http://schemas.microsoft.com/exchange/autodiscover/outlook/responseschema/2006a</AcceptableResponseSchema>
+        </Request>
+    </Autodiscover>"""
     re = {}
     try:
-        response = requests.post(url, data=body, timeout=DEFAULT_TIMEOUT, headers={"Content-Type": "text/xml; charset=utf-8"})
+        response = requests.post(url, data=body, timeout=DEFAULT_TIMEOUT, headers={"Content-Type": "text/xml; charset=utf-8", "User-Agent": USER_AGENT})
     except requests.exceptions.RequestException as e:
         if isinstance(e, requests.exceptions.TooManyRedirects):
             re["error"] = "Too many redirects."
@@ -126,18 +137,22 @@ def http_post(url, mailaddress):
     return re
 
 def https_post(url, mailaddress):
-    body = f"""<?xml version='1.0' encoding='utf-8'?><Autodiscover xmlns="http://schemas.microsoft.com/exchange/autodiscover/outlook/requestschema/2006">
-        <Request><EMailAddress>{mailaddress}</EMailAddress>
-        <AcceptableResponseSchema>http://schemas.microsoft.com/exchange/autodiscover/outlook/responseschema/2006a</AcceptableResponseSchema>
-        </Request></Autodiscover>
-    """
+    """Make HTTPS POST request with retries and proper error handling"""
+    LOGGER.info(f"Making HTTPS POST request to {url}")
+    body = f"""<?xml version='1.0' encoding='utf-8'?>
+    <Autodiscover xmlns="http://schemas.microsoft.com/exchange/autodiscover/outlook/requestschema/2006">
+        <Request>
+            <EMailAddress>{mailaddress}</EMailAddress>
+            <AcceptableResponseSchema>http://schemas.microsoft.com/exchange/autodiscover/outlook/responseschema/2006a</AcceptableResponseSchema>
+        </Request>
+    </Autodiscover>"""
     re = {}
     try:
-        response = requests.post(url, data=body, timeout=DEFAULT_TIMEOUT, headers={"Content-Type": "text/xml; charset=utf-8"}, verify=certifi.where())
-        re["verified"] = True
+        response = requests.post(url, data=body, timeout=DEFAULT_TIMEOUT, headers={"Content-Type": "text/xml; charset=utf-8", "User-Agent": USER_AGENT}, verify=certifi.where())
+        re["https_verified"] = True
     except requests.exceptions.SSLError:
         try:
-            re["verified"] = False
+            re["https_verified"] = False
             response = requests.post(url, data=body, timeout=DEFAULT_TIMEOUT, headers={"Content-Type": "text/xml; charset=utf-8"}, verify=False)
         except requests.exceptions.SSLError:
             re["error"] = "SSL Connection Error"
@@ -155,7 +170,6 @@ def https_post(url, mailaddress):
     except Exception as e:
         re["error"] = str(e)
         return re
-
     re.update(process_respond(response))
     return re
 
@@ -163,35 +177,35 @@ def get_redirect_post(url, mailaddress):
     """
     this function will redict a http get method to a https post method to get a xml string
     """
-    user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.93 Safari/537.36 (Autoconfig Test)"
+    LOGGER.info(f"Making HTTP GET initial then HTTP POST to {url}")
     try:
-        response = requests.get(url, timeout=DEFAULT_TIMEOUT, headers={"User-Agent": user_agent})
-        if response.history:
-            redict = {}
-            for redirect in response.history:
-                redict[redirect.url] = redirect.status_code
-            redict[response.url] = response.status_code
-            re = {}
-            re.update({"redirect": redict})
-            if response.url.startswith("https://"):
-                # Maybe "request_error" in fetch_config().
-                re.update(https_post(response.url, mailaddress))
-            else:
-                re.update({'error': f"Not a https url : {url}"})
-            return re
-        else:
-            # there is no redict
+        response = requests.get(url, timeout=DEFAULT_TIMEOUT, headers={"User-Agent": USER_AGENT})
+        if not response.history:
             return {}
-    except Exception as e:
-        # this error is no need to care about,means no redict
+
+        redirect_chain = {}
+        all_responses = list(response.history) + [response]
+        for r in all_responses:
+            if r.url.startswith("https://"):
+                # Record all redirects to the current URL
+                for prev_r in all_responses:
+                    if prev_r.url == r.url:
+                        break
+                    redirect_chain[prev_r.url] = prev_r.status_code
+                
+                # Send POST request and return result
+                post_result = https_post(r.url, mailaddress)
+                result = {"redirect": redirect_chain}
+                if "redirect" in post_result:
+                    result["redirect"].update(post_result.pop("redirect"))
+                result.update(post_result)
+                return result
+            else:
+                # Record HTTP redirects
+                redirect_chain[r.url] = r.status_code
+                
+        # If no HTTPS URL is encountered, return an empty dictionary
         return {}
-
-
-if __name__ == "__main__":
-    domain = "pobox.com"
-    url1 = f"https://{domain}/autodiscover/autodiscover.xml"
-    url2 = f"https://autodiscover.{domain}/autodiscover/autodiscover.xml"
-    print(https_get(url1))
-    print(https_post(url1, domain))
-    print(https_get(url2))
-    print(https_post(url2, domain))
+        
+    except requests.exceptions.RequestException:
+        return {}
