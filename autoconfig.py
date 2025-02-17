@@ -2,6 +2,7 @@
 import logging
 import xml.etree.ElementTree as ET
 import tldextract
+import json
 
 from httpmethod import http_get, https_get
 from srv import resolve_mx
@@ -106,7 +107,7 @@ def from_ISPDB(domain):
 
 def autoconfig(domain, mailaddress):
     '''
-    we also consider the back-off condition : query the mx record and then get autoconfig info
+    This tool also consider the back-off condition : query the mx record and then retrieve configurations
 
     :param domain: mail domain
     :param mailaddress:  mail address in form of username@domain
@@ -114,7 +115,7 @@ def autoconfig(domain, mailaddress):
     '''
 
     data = {}
-    # step 1&2, we lookup the autoconfig file from the site of email server
+    # step 1&2, we lookup the autoconfig file from the domain part of email address
     config_url1 = f"http://autoconfig.{domain}/mail/config-v1.1.xml?emailaddress={mailaddress}"
     config_url2 = f"http://{domain}/.well-known/autoconfig/mail/config-v1.1.xml?emailaddress={mailaddress}"
     url_pool = [(config_url1, "autoconfig-url"), (config_url2, "well-known-url")]
@@ -134,56 +135,45 @@ def autoconfig(domain, mailaddress):
             del cur['xml']
         data[alias]["https_get"] = cur
 
+    # Note: In our paper, we consider the ISPDB to be a kind of "built-in provider list".
     # step 3, we lookup the autoconfig file from thunderbird ISPDB
-    data["ISPDB"] = from_ISPDB(domain)
+    # data["ISPDB"] = from_ISPDB(domain)
 
     # step 4 lookup the mx record
     mxlist = resolve_mx(domain)
     if not mxlist:  # no mx record
         return data
 
-    domain = mxlist[0]["hostname"]
+    mxhostname = mxlist[0]["hostname"]
     backoff = {}
     data["Back-off"] = backoff
-    backoff["MX"] = domain
-    regdomain  = tldextract.extract(domain).registered_domain
-    if not regdomain:   #we can't get the register domain
+    backoff["MX_Hostname"] = mxhostname
+    # E.g., mxhostname = mail.hosted.example.com
+    # mxmaindomain = example.com
+    # mxfulldomain = hosted.example.com
+    mxmaindomain = tldextract.extract(mxhostname).registered_domain
+    mxfulldomain = '.'.join(tldextract.extract(mxhostname).subdomain.split('.')[1:] + [tldextract.extract(mxhostname).registered_domain])
+    if mxfulldomain == domain or mxfulldomain == '':
         return data
-
-    # step 5 lookup the autoconfig file from reg domain
-    backoff["register domain"] = {}
-    backoff["register domain"]["register domain"] = regdomain
-    url3 = f"https://autoconfig.{regdomain}/mail/config-v1.1.xml?emailaddress={mailaddress}"
-    cur = https_get(url3)
-    if "xml" in cur:
-        cur["config"] = parse_autoconfig(cur["xml"])
-        del cur['xml']
-    backoff["register domain"]["https_get"] = cur
-    backoff["register domain"]["ISPDB"] = from_ISPDB(regdomain)
-
-    if regdomain == domain: #domain is register domain
-        return data
-
-    parent_domain = ".".join(domain.split(".")[1:])
-    if parent_domain == regdomain:
-        backoff["register domain"]["parent domain"] = "parent domain is same as the register domain"
-        return data
-
-    # step 6 lookup the autoconfig file from parent domain
-    backoff["parent domain"] = {}
-    backoff["parent domain"]["parent domain"] = parent_domain
-    url4 = f"https://autoconfig.{parent_domain}/mail/config-v1.1.xml?emailaddress={mailaddress}"
+    backoff["mxfulldomain_domain"] = {}
+    backoff["mxfulldomain_domain"]["request_domain"] = mxfulldomain
+    url4 = f"https://autoconfig.{mxfulldomain}/mail/config-v1.1.xml?emailaddress={mailaddress}"
     cur = https_get(url4)
     if "xml" in cur:
         cur["config"] = parse_autoconfig(cur["xml"])
         del cur['xml']
-    backoff["parent domain"]["https_get"] = cur
-    backoff["parent domain"]["ISPDB"] = from_ISPDB(regdomain)
+    backoff["mxfulldomain_domain"]["https_get"] = cur
+    # backoff["mxfulldomain_domain"]["ISPDB"] = from_ISPDB(mxfulldomain)
+
+    if mxmaindomain == domain or mxfulldomain == mxmaindomain or mxmaindomain == '':
+        return data
+    backoff["mxmaindomain_domain"] = {}
+    backoff["mxmaindomain_domain"]["request_domain"] = mxmaindomain
+    url5 = f"https://autoconfig.{mxmaindomain}/mail/config-v1.1.xml?emailaddress={mailaddress}"
+    cur = https_get(url5)
+    if "xml" in cur:
+        cur["config"] = parse_autoconfig(cur["xml"])
+        del cur['xml']
+    backoff["mxmaindomain_domain"]["https_get"] = cur
+    # backoff["mxmaindomain_domain"]["ISPDB"] = from_ISPDB(mxmaindomain)
     return data
-
-if __name__ == "__main__":
-    import json
-
-    x = autoconfig('gmail.com', "admin@gmail.com")
-    json_string = json.dumps(x, indent=4, default=lambda obj: obj.__dict__)
-    print(json_string)

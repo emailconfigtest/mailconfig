@@ -1,6 +1,7 @@
 
 import xml.etree.ElementTree as ET
 import logging
+import json
 from srv import resolve_srv
 from httpmethod import http_get, https_get, http_post, https_post, get_redirect_post
 
@@ -16,7 +17,7 @@ def autodiscover_srv(domain):
     '''
     try:
         res = resolve_srv(f"_autodiscover._tcp.{domain}")
-        if not res or not res['srv_record']:        #none list
+        if not res or not res['srv_record']:
             return None
         try:
             if res['srv_record']:
@@ -28,13 +29,14 @@ def autodiscover_srv(domain):
         autodiscover_url = f"https://{hostname}/autodiscover/autodiscover.xml"
         return autodiscover_url
     except Exception:
-        # LOGGER.warning("Failed to resolve autodiscover SRV record")
+        LOGGER.warning("Failed to resolve autodiscover SRV record")
         return None
 
 
 def parse_autodiscover(content):
     '''
-    details: https://msopenspecs.azureedge.net/files/MS-OXDSCLI/[MS-OXDSCLI].pdf
+    Ref: https://msopenspecs.azureedge.net/files/MS-OXDSCLI/[MS-OXDSCLI].pdf
+
     parse a xml into autodiscover struct,
 
     :param content: xml form content
@@ -97,7 +99,7 @@ def parse_autodiscover(content):
                     "encryption": get_element_text(protocol, "ns2:Encryption", namespace),
                     "spa": get_element_text(protocol, "ns2:SPA", namespace, "on"),
                     "ttl": get_element_text(protocol, "ns2:TTL", namespace, "1"),
-                    "domainrequired": get_element_text(protocol, "ns2:DomainRequired", namespace, "on")
+                    "domainrequired": get_element_text(protocol, "ns2:DomainRequired", namespace)
                 }
                 incoming_server_data.append(server_data)
             if protocol.find("ns2:Type", namespace).text == "SMTP":
@@ -109,9 +111,10 @@ def parse_autodiscover(content):
                     "encryption": get_element_text(protocol, "ns2:Encryption", namespace),
                     "spa": get_element_text(protocol, "ns2:SPA", namespace, "on"),
                     "ttl": get_element_text(protocol, "ns2:TTL", namespace, "1"),
-                    "domainrequired": get_element_text(protocol, "ns2:DomainRequired", namespace, "on")
+                    "domainrequired": get_element_text(protocol, "ns2:DomainRequired", namespace)
                 }
                 outgoing_server_data.append(server_data)
+            # Notes: WEB is not considered in our scope.
             if protocol.find("ns2:Type", namespace).text == "WEB":
                 if protocol.find("ns2:External", namespace):
                     server_data["External"] = {}
@@ -119,53 +122,53 @@ def parse_autodiscover(content):
                         server_data["External"]["OWAUrl"]["AuthenticationMethod"] = protocol.find("ns2:External", namespace).find("ns2:OWAUrl", namespace).get("AuthenticationMethod")
                         server_data["External"]["OWAUrl"]["URL"] = protocol.find("ns2:External", namespace).find("ns2:OWAUrl", namespace).text
                         web_access_data.append(server_data)
-        data = {"incomingServers": incoming_server_data, "outgoingServers": outgoing_server_data, "webmails": web_access_data}
+        data = {"incomingServers": incoming_server_data, "outgoingServers": outgoing_server_data, "web_access": web_access_data}
     return data
 
 
 def config_from_redirect(url, mailaddress, max_redirects=10):
     '''
-    redirect found in the xml, we must use https post method, and cover the result got before
+    Redirect found in the xml, we must use https post method, and cover the result got before
     In addition to the return structure of the HTTMethod, there is also Rediriect information
 
-    :param url:     redirectUrl
-    :param mailaddress:     redirectAddr
+    :param url:     redirectUrl, specifies the URL of the server to use for a subsequent Autodiscover request;
+    :param mailaddress:     redirectAddr, specifies the email address to use for a subsequent Autodiscover request;
     :param max_redirects:   maximum number of redircet times
-    :return:    In addition to the return structure of the HTTMethod, there is also Rediriect information
-                Redirect_path: XML redirect path list URL+mailaddress
-                Redirect_XML: Information, "success" indicates success , while other strings indicate errors
-                This structure can directly overwrite the original data, and errors, configurations, etc.
-                If no configuration is obtained, the original configuration can also be used
-                Use redirect_XML to determine what errors were encountered during the redirect process
+    :return:    Redirect_from_xml: XML redirect history;
+                Result: Configuration request result, "success" indicates success , while others indicate errors;
     '''
     # print(max_redirects)
     redirect_path = []
     for i in range(max_redirects):
-        redirect_path.append((url, mailaddress))
+        redirect_path.append({
+            "url": url,
+            "mailaddress": mailaddress
+        })
         cur = https_post(url, mailaddress)
         # print(cur)
-        if "xml"  not in cur:  #fail in this step
-            cur.update({"redirect_path": redirect_path , "redirect_xml" : "redirect meet a error, see in error"})
+        if "xml" not in cur:  #fail in this step
+            cur.update({"redirect_from_xml": redirect_path , "result" : "redirect meet a error, see in error"})
             return cur
         cur["config"] = parse_autodiscover(cur["xml"])
         if "extract_error" in cur["config"]:
-            return {"redirect_path": redirect_path , "redirect_xml" : "error in xml : "+ cur["config"]["extract_error"]}
+            return {"redirect_from_xml": redirect_path , "result" : "error in xml : "+ cur["config"]["extract_error"]}
         if "redirectUrl" in cur["config"]:
             url = cur["config"]["redirectUrl"]
         elif "redirectAddr" in cur["config"]:
             mailaddress = cur["config"]["redirectAddr"]
         else:
-            cur.update({"redirect_path": redirect_path , "redirect_xml" : "success"})
+            cur.update({"redirect_from_xml": redirect_path , "result" : "success"})
             return cur
         if (url,mailaddress) in redirect_path:    #meet a circle
-            return {"redirect_path": redirect_path, "redirect_xml": "self redirect to : " + url + "with param" + mailaddress}
-    return {"redirect_path": redirect_path, "redirect_xml": "Max redirects reached"}
+            return {"redirect_from_xml": redirect_path, "result": "self redirect to : " + url + "with param" + mailaddress}
+    return {"redirect_from_xml": redirect_path, "result": "Max redirects reached"}
 
 
 def autodiscover(domain, mailaddress):
     '''
-    # Ref: https://learn.microsoft.com/en-us/previous-versions/office/office-2010/cc511507(v=office.14)?redirectedfrom=MSDN
-    # Ref: https://learn.microsoft.com/en-us/previous-versions/office/developer/exchange-server-interoperability-guidance/hh352638(v=exchg.140)
+    Ref: https://msopenspecs.azureedge.net/files/MS-OXDISCO/%5bMS-OXDISCO%5d.pdf
+    
+    Besides, we also append lots of request methods to retrieve the configuration;
 
     :param domain: mail domain
     :param mailaddress:  mail address in form of username@domain
@@ -173,14 +176,13 @@ def autodiscover(domain, mailaddress):
     '''
 
     data = {}
-    # Step 1 & 2
-    # 4 urls and 2 methods
+    # Request from origin and prefix, including HTTP(s) GET and POST methods;
     url1 = f"http://{domain}/autodiscover/autodiscover.xml"
     url2 = f"http://autodiscover.{domain}/autodiscover/autodiscover.xml"
     url_pool =[(url1, "autodis-origin"), (url2, "autodis-prefix")]
     for url, alias in url_pool:
         data[alias] = {}
-        # request from HTTP
+        # request from HTTP GET
         cur = http_get(url)
         if "xml" in cur:
             cur["config"] = parse_autodiscover(cur["xml"])
@@ -191,6 +193,7 @@ def autodiscover(domain, mailaddress):
             del cur['xml']
         data[alias]["http_get"] = cur
 
+        # request from HTTP POST
         cur = http_post(url, mailaddress)
         if "xml" in cur:
             cur["config"] = parse_autodiscover(cur["xml"])
@@ -223,8 +226,8 @@ def autodiscover(domain, mailaddress):
             del cur['xml']
         data[alias]["https_post"] = cur
     
-    # Step 3
-    url3 = f"http://autodiscover.{domain}/autodiscover/autodiscover.xml"  # Must redirect to https and also prompt the user.
+    # Request from prefix, including HTTP GET for initial request and HTTP POST for redirect;
+    url3 = f"http://autodiscover.{domain}/autodiscover/autodiscover.xml"  # Should prompt the user to warn them of the redirection.
     cur = get_redirect_post(url3, mailaddress)
     if "xml" in cur:
         cur["config"] = parse_autodiscover(cur["xml"])
@@ -233,30 +236,11 @@ def autodiscover(domain, mailaddress):
         elif "redirectAddr" in cur["config"]:
             cur.update(config_from_redirect(url3, cur["config"]["redirectAddr"]))
         del cur['xml']
-    data['autodis-redirect'] = cur
-
-    # Step 4, autodiscover-v2
-    # url4 = f"https://autodiscover.{domain}/autodiscover/autodiscover.json?Email=admin@{domain}&Protocol=AutodiscoverV1" # Autodiscover v2, ref to https://docs.grommunio.com/kb/autodiscover.html and https://www.msxfaq.de/exchange/autodiscover/autodiscover_v2.htm
-    # data["autodis-v2"]= {}
-    # try:
-    #     res = requests.get(url4, timeout=10, allow_redirects=True, headers={"User-Agent": user_agent}, verify=certifi.where())
-    #     content_type = res.headers.get('content-type', '').lower().split(';')[0]
-    #     if content_type == "application/json":
-    #         data['autodis-v2'].update(res.json())
-    #     else:
-    #         data['autodis-v2'].update({'request_error': 'Content-Type is not json'})
-    # except requests.exceptions.SSLError:
-    #     data["autodis-v2"].update({'request_error': 'SSL error'})
-    # except requests.exceptions.ConnectionError:
-    #     data["autodis-v2"].update({'request_error': 'Connection error'})
-    # except Exception as e:
-    #     data["autodis-v2"].update({'request_error': 'Other error'})
-        
+    data['autodis-redirect'] = cur  
     
-    # Step 5
+    # Retrieve Autodiscover URL from SRV record
     data['autodis-srv'] = {}
     url_from_srv = autodiscover_srv(domain)
-    # print(url_from_srv)
     if url_from_srv:
         cur = https_post(url_from_srv, mailaddress)
         if "xml" in cur:
@@ -270,12 +254,3 @@ def autodiscover(domain, mailaddress):
     else:
         data['autodis-srv']['error'] =  'No SRV record'
     return data
-
-
-
-if __name__=="__main__":
-    import json
-
-    x = autodiscover("soverin.net", "admni@soverin.net") # have srv
-    json_string = json.dumps(x, indent=4, default=lambda obj: obj.__dict__)
-    print(json_string)
