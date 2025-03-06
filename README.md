@@ -61,7 +61,7 @@ Studies related to Autodiscover for Exchange:
   author 	= {Shushang Wen and Yiming Zhang and Yuxiang Shen and Bingyu Li and Haixin Duan and Jingqiang Lin},
   title 	= {Automatic Insecurity: Exploring Email Auto-configuration in the Wild},
   booktitle = {32nd Annual Network and Distributed System Security Symposium, {NDSS}
-                  2025, San Diego, California, USA, February 24 - 28, 2024},
+                  2025, San Diego, California, USA, February 24 - 28, 2025},
   publisher	= {The Internet Society},
   year		= {2025}
 }
