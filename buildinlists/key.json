@@ -5,6 +5,6 @@
   }, 
   "mailspring-provider-settings": {},
   "nodemailer": {},
-  "DeltaChat": {},
-  "FairEmail": {"domainre" : ["domain_regular"]}
+  "deltaChat": {},
+  "fairEmail": {"domainre" : ["domain_regular"]}
 }
