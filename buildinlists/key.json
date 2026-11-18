@@ -1,10 +1,10 @@
 {
-  "mailcore": {
+  "mailcore-provider-settings": {
     "domainre" : ["domain_regular"], 
     "mxre" : ["mx_regular"] 
   }, 
-  "mailspring": {},
+  "mailspring-provider-settings": {},
   "nodemailer": {},
-  "DeltaChat": {},
-  "FairEmail": {"domainre" : ["domain_regular"]}
+  "deltaChat": {},
+  "fairEmail": {"domainre" : ["domain_regular"]}
 }
